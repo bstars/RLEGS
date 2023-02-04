@@ -111,7 +111,6 @@ class DDPG():
 				param_target.data.mul_(Config.TAU)
 				param_target.data.add_( (1 - Config.TAU) * param.data )
 
-
 	def sample(self, batch_size=Config.BATCH_SIZE, random=False, noise_scale=0.1):
 		"""sample _summary_
 
@@ -171,46 +170,44 @@ class DDPG():
 		self.sample(random=True, batch_size=Config.BATCH_SIZE * 2)
 
 		qloss = nn.MSELoss(reduction='mean')
-		# qloss = nn.L1Loss(reduction='mean')
+		critic_optim = torch.optim.Adam(params=self.critic.parameters(), lr=Config.CRITIC_LR)
+		actor_optim = torch.optim.Adam(params=self.actor.parameters(), lr=Config.ACTOR_LR)
 
 		tic = time()
 		iter = 0
 
-		critic_optim = torch.optim.Adam(params=self.critic.parameters(), lr=Config.CRITIC_LR)
-		actor_optim = torch.optim.Adam(params=self.actor.parameters(), lr=Config.ACTOR_LR)
 
 		while True:
 
 			iter += 1
-			noise_scale = max(1 - (1e-7) * iter, 0.1)
+			noise_scale = max(1 - (1e-7) * iter, 0.1) # GLIE policy
 			self.sample(random=False, noise_scale=noise_scale, batch_size=1)
 
-			for _ in range(1):
-				states, actions, rewards, states_next, terminals = self.sample_from_buffer()
-				with torch.no_grad():
-					actions_next = self.actor_target(states_next, noise_scale=None)
-					targets = rewards[:,None] + Config.GAMMA * (1 - terminals[:,None]) * self.critic_target(states_next, actions_next)
+
+			states, actions, rewards, states_next, terminals = self.sample_from_buffer()
+			with torch.no_grad():
+				actions_next = self.actor_target(states_next, noise_scale=None)
+				targets = rewards[:,None] + Config.GAMMA * (1 - terminals[:,None]) * self.critic_target(states_next, actions_next)
 
 
-				# critic training
-				critic_optim.zero_grad()
-				pred = self.critic(states, actions)
+			# critic training
+			critic_optim.zero_grad()
+			pred = self.critic(states, actions)
 
-				closs = qloss(targets, pred)
-				closs.backward()
-				critic_optim.step()
+			closs = qloss(targets, pred)
+			closs.backward()
+			critic_optim.step()
 
+			# Actor train
+			actor_optim.zero_grad()
+			scores = self.critic(states, self.actor(states))
 
-				# Actor train
-				actor_optim.zero_grad()
-				scores = self.critic(states, self.actor(states))
+			aloss = -torch.mean(scores)
+			aloss.backward()
+			actor_optim.step()
 
-				aloss = -torch.mean(scores)
-				aloss.backward()
-				actor_optim.step()
-
-				# self.switch()
-				self.soft_update()
+			# self.switch()
+			self.soft_update()
 
 			if iter % 10000 == 0:
 				print('closs:%.4f, aloss:%.4f' % (closs.item(), aloss.item()))
